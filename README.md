@@ -52,11 +52,6 @@ MDC/
 - 在与数据使用无关的上下文中提及
 - 提及的数据库标识符但没有实际数据使用
 
-## 安装依赖
-
-```bash
-pip install pandas pyarrow zai logging concurrent.futures
-```
 
 ## 使用方法
 
