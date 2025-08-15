@@ -25,6 +25,11 @@ TEMPERATURE = 0.1  # 较低的温度值以获得更一致的结果
 
 # 分析选项
 ENABLE_MISLABEL_ANALYSIS = False  # 是否让模型判断是否误标注；False仅做类型分析与规律总结
+ENABLE_ARTICLE_SUMMARY = False  # 是否在主分析流程中直接生成按文章聚合的提炼规律（推荐单独运行汇总）
+
+# 文章级归纳配置（用于解耦式调用）
+ARTICLE_SUMMARY_INPUT_FILE = "final_analysis_results.json"  # 默认为主流程输出
+ARTICLE_SUMMARY_OUTPUT_FILE = "article_summaries.json"      # 汇总输出文件名（将保存在TEMP_DIR下）
 
 # 恢复配置
 START_FROM_BATCH = 0  # 如果需要从中断处恢复，设置为具体的批次编号

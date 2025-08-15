@@ -45,7 +45,8 @@ def main():
         temperature=TEMPERATURE,
         max_len=MAX_TOKENS,
         output=TEMP_DIR,
-        enable_mislabel_analysis=ENABLE_MISLABEL_ANALYSIS
+        enable_mislabel_analysis=ENABLE_MISLABEL_ANALYSIS,
+        enable_article_summary=ENABLE_ARTICLE_SUMMARY
     )
     
     try:
@@ -95,6 +96,18 @@ def main():
         print(f"\n💾 详细结果已保存到: {FINAL_RESULTS_FILE}")
         print(f"📁 中间结果目录: {TEMP_DIR}")
         print(f"📝 日志文件: {LOG_FILE}")
+        
+        # 展示部分文章级别规律
+        if ENABLE_ARTICLE_SUMMARY and results.get('article_summaries'):
+            print("\n🧩 文章级别提炼规律(示例前3篇):")
+            shown = 0
+            for aid, summary_item in results['article_summaries'].items():
+                print(f"\n📄 Article {aid}")
+                para = summary_item.get('refined_rules_paragraph', '') or ''
+                print(f"  摘要: {para[:300]}{'...' if len(para) > 300 else ''}")
+                shown += 1
+                if shown >= 3:
+                    break
         
         return True
         
@@ -149,5 +162,33 @@ if __name__ == "__main__":
         # 恢复模式
         resume_analysis()
     else:
-        # 正常模式
-        main()
+        # 支持独立的文章级归纳
+        if len(sys.argv) > 1 and sys.argv[1] == "--summarize-articles":
+            analyzer = DatasetAnalyzer(
+                api_key=API_KEY or "dummy",  # 文章级汇总可不需要真实调用，如需LLM重提炼仍可用
+                max_workers=MAX_WORKERS,
+                max_retries=MAX_RETRIES,
+                temperature=TEMPERATURE,
+                max_len=MAX_TOKENS,
+                output=TEMP_DIR,
+                enable_mislabel_analysis=ENABLE_MISLABEL_ANALYSIS,
+                enable_article_summary=False
+            )
+            try:
+                from config_example import ARTICLE_SUMMARY_INPUT_FILE, ARTICLE_SUMMARY_OUTPUT_FILE
+            except Exception:
+                ARTICLE_SUMMARY_INPUT_FILE = FINAL_RESULTS_FILE
+                ARTICLE_SUMMARY_OUTPUT_FILE = "article_summaries.json"
+
+            print("\n🧩 基于已存在结果进行文章级归纳...")
+            summaries = analyzer.summarize_articles_from_file(
+                input_file=ARTICLE_SUMMARY_INPUT_FILE,
+                output_file=ARTICLE_SUMMARY_OUTPUT_FILE
+            )
+            if 'error' in summaries:
+                print(f"❌ 文章级归纳失败: {summaries['error']}")
+                sys.exit(1)
+            print(f"✅ 完成。输出位于 {TEMP_DIR}/{ARTICLE_SUMMARY_OUTPUT_FILE}")
+        else:
+            # 正常模式
+            main()

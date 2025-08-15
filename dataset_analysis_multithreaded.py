@@ -22,7 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class DatasetAnalyzer:
-    def __init__(self, api_key: str, max_workers: int = 5, max_retries: int = 5, temperature: float = 0.1, max_len: int = 10000, output: str = "temp_results", enable_mislabel_analysis: bool = True):
+    def __init__(self, api_key: str, max_workers: int = 5, max_retries: int = 5, temperature: float = 0.1, max_len: int = 10000, output: str = "temp_results", enable_mislabel_analysis: bool = True, enable_article_summary: bool = False):
         """
         初始化数据集分析器
         
@@ -38,6 +38,7 @@ class DatasetAnalyzer:
         self.temperature = temperature
         self.max_len = max_len
         self.enable_mislabel_analysis = enable_mislabel_analysis
+        self.enable_article_summary = enable_article_summary
         
         # 创建临时文件目录
         self.temp_dir = output
@@ -379,11 +380,17 @@ C) None - 不是数据集引用或不相关
         
         # 汇总结果
         summary = self.generate_summary(all_results)
+
+        # 文章级别规律提炼
+        article_summaries = {}
+        if self.enable_article_summary:
+            article_summaries = self.generate_article_level_summaries(all_results)
         
         # 保存最终结果
         final_results = {
             'summary': summary,
             'detailed_results': all_results,
+            'article_summaries': article_summaries,
             'failed_items': self.failed_items,
             'metadata': {
                 'total_processed': len(all_results),
@@ -399,6 +406,135 @@ C) None - 不是数据集引用或不相关
         logger.info(f"分析完成！总计处理 {len(all_results)} 项，失败 {len(self.failed_items)} 项")
         
         return final_results
+
+    def create_article_summary_prompt(self, article_id: str, items: List[Dict]) -> str:
+        """
+        创建文章级别的规律提炼提示词
+        """
+        items_json = json.dumps(items, ensure_ascii=False, indent=2)
+        prompt = f"""
+你是一名数据标注与信息抽取专家。请基于同一篇文章(article_id={article_id})的多条数据集分类分析结果，进行“提炼但不损失细节”的两层总结：
+
+输入为该文章下每个数据集ID的分析要点：
+{items_json}
+
+请输出结构化JSON，字段含义如下：
+{{
+  "article_id": "{article_id}",
+  "refined_rules_paragraph": "以自然语言段落形式，抽象出本篇文章在数据集分类上的共性规律与判据，语言简洁但完整，避免重复，避免仅列点",
+  "common_patterns": ["跨多个数据集分类条目的共性规律，去重、抽象，条目式"],
+  "type_specific_patterns": {{
+     "Primary": ["该类型在本文中的典型触发线索/上下文表达，条目式，整合不同数据集的重合点与差异点"],
+     "Secondary": ["同上"],
+     "None": ["同上"]
+  }},
+  "supporting_keywords_top": ["在本文范围内，能够指示分类的重要关键词/短语，去重按重要性排序"],
+  "source_patterns": [
+    {{"target_dataset_id": "...", "classification": "Primary|Secondary|None", "context_pattern": "...", "analysis_reason": "...", "supporting_keywords": ["..."]}}
+  ]
+}}
+
+注意：
+- 不要重新判断/更改分类标签，不要做误标注判断。
+- "refined_rules_paragraph"面向复用，尽量提炼共性；"source_patterns"完整保留细节，确保不丢失信息。
+"""
+        return prompt
+
+    def generate_article_level_summaries(self, results: List[Dict]) -> Dict[str, Dict]:
+        """
+        生成按文章聚合的规律提炼
+        返回: article_id -> summary dict
+        """
+        # 分组
+        article_to_items: Dict[str, List[Dict]] = {}
+        for r in results:
+            if 'error' in r:
+                continue
+            article_id = r.get('article_id') or (r.get('original_data', {}) or {}).get('article_id')
+            dataset_id = r.get('target_dataset_id') or (r.get('original_data', {}) or {}).get('target_dataset_id')
+            classification = r.get('original_classification') or (r.get('original_data', {}) or {}).get('type')
+            if not article_id or not dataset_id:
+                continue
+            item = {
+                'target_dataset_id': str(dataset_id),
+                'classification': str(classification) if classification is not None else '',
+                'context_pattern': r.get('context_pattern', ''),
+                'analysis_reason': r.get('analysis_reason', ''),
+                'supporting_keywords': r.get('supporting_keywords', []),
+            }
+            article_to_items.setdefault(str(article_id), []).append(item)
+
+        # 逐文章汇总
+        article_summaries: Dict[str, Dict] = {}
+        for article_id, items in article_to_items.items():
+            # 控制输入大小：截断过长字段与数量
+            compact_items: List[Dict] = []
+            for it in items[:100]:
+                compact_items.append({
+                    'target_dataset_id': it['target_dataset_id'],
+                    'classification': it['classification'],
+                    'context_pattern': (it.get('context_pattern') or '')[:1200],
+                    'analysis_reason': (it.get('analysis_reason') or '')[:1200],
+                    'supporting_keywords': list(it.get('supporting_keywords', []))[:20]
+                })
+            prompt = self.create_article_summary_prompt(article_id, compact_items)
+            summary = self.call_api_with_retry(prompt, f"article_{article_id}")
+            if not summary or 'error' in summary:
+                # 退化：不经LLM，做简单统计
+                type_to_patterns: Dict[str, List[str]] = {}
+                for it in compact_items:
+                    t = it.get('classification') or 'unknown'
+                    type_to_patterns.setdefault(t, []).append(it.get('context_pattern') or '')
+                article_summaries[article_id] = {
+                    'article_id': article_id,
+                    'refined_rules_paragraph': '提炼失败(回退)：按类型汇总上下文规律，供参考。',
+                    'common_patterns': [],
+                    'type_specific_patterns': type_to_patterns,
+                    'supporting_keywords_top': [],
+                    'source_patterns': compact_items
+                }
+            else:
+                article_summaries[article_id] = summary
+
+        # 单独保存文件
+        try:
+            with open(os.path.join(self.temp_dir, 'article_summaries.json'), 'w', encoding='utf-8') as f:
+                json.dump(article_summaries, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"保存文章级别规律文件失败: {e}")
+
+        return article_summaries
+
+    # === 解耦式：从已存在的final_analysis_results.json生成文章级归纳 ===
+    def summarize_articles_from_file(self, input_file: str, output_file: Optional[str] = None) -> Dict[str, Dict]:
+        """
+        基于已完成的最终结果文件进行文章级别规律归纳，并将结果写入TEMP_DIR下的文件。
+        """
+        try:
+            with open(input_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception as e:
+            logger.error(f"读取输入文件失败: {e}")
+            return {"error": f"读取输入文件失败: {e}"}
+
+        results = data.get('detailed_results', [])
+        if not isinstance(results, list) or not results:
+            return {"error": "输入文件中未找到detailed_results或为空"}
+
+        logger.info(f"开始基于现有结果进行文章级归纳，共 {len(results)} 条分析结果")
+
+        article_summaries = self.generate_article_level_summaries(results)
+
+        # 输出路径
+        out_path = os.path.join(self.temp_dir, output_file) if output_file else os.path.join(self.temp_dir, 'article_summaries.json')
+        try:
+            with open(out_path, 'w', encoding='utf-8') as f:
+                json.dump(article_summaries, f, ensure_ascii=False, indent=2)
+            logger.info(f"文章级归纳已保存到: {out_path}")
+        except Exception as e:
+            logger.error(f"保存文章级归纳失败: {e}")
+
+        return article_summaries
     
     def generate_summary(self, results: List[Dict]) -> Dict:
         """

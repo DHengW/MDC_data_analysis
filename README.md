@@ -11,14 +11,22 @@
 - 📊 **详细统计分析**: 生成分类分布、关键词频率、准确性等统计信息
 - 📝 **完整日志记录**: 详细的处理日志，便于问题排查
 
+## 安装要求
+
+在运行之前，请确保安装以下Python依赖：
+
+```bash
+pip install pandas zai
+```
+
 ## 文件结构
 
 ```
-MDC/
+.
 ├── dataset_analysis_multithreaded.py  # 主分析模块
 ├── config_example.py                  # 配置文件示例
 ├── run_analysis_example.py           # 运行示例脚本
-├── README_dataset_analysis.md         # 使用说明
+├── README.md                          # 使用说明
 └── temp_results/                      # 临时结果目录（自动创建）
     ├── batch_0_results.json          # 批次结果文件
     ├── batch_0_item_0.json           # 单项结果文件
@@ -66,10 +74,26 @@ API_KEY = "your_zhipu_ai_api_key"  # 必须：您的智谱AI API密钥
 # 文件路径配置
 PARQUET_FILE_PATH = "your_dataset.parquet"  # 必须：您的数据集文件路径
 
-# 可选配置
+# 并发配置
 MAX_WORKERS = 5      # 并发线程数，建议根据API配额调整
 BATCH_SIZE = 50      # 每批处理数据量
 MAX_RETRIES = 5      # 最大重试次数
+
+# 输出配置
+TEMP_DIR = "temp_results"  # 临时结果存储目录
+FINAL_RESULTS_FILE = "final_analysis_results.json"  # 最终结果文件
+LOG_FILE = "dataset_analysis.log"  # 日志文件
+
+# 模型配置
+MODEL_NAME = "glm-4.5"  # 使用的智谱AI模型版本
+MAX_TOKENS = 10000     # 最大输出token数
+TEMPERATURE = 0.1      # 推理温度，较低值获得更一致的结果
+
+# 分析选项
+ENABLE_MISLABEL_ANALYSIS = False  # 是否让模型判断是否误标注；False仅做类型分析与规律总结
+
+# 恢复配置
+START_FROM_BATCH = 0   # 如果需要从中断处恢复，设置为具体的批次编号
 ```
 
 ### 2. 运行分析
@@ -94,7 +118,11 @@ from config_example import *
 analyzer = DatasetAnalyzer(
     api_key=API_KEY,
     max_workers=MAX_WORKERS,
-    max_retries=MAX_RETRIES
+    max_retries=MAX_RETRIES,
+    temperature=TEMPERATURE,
+    max_len=MAX_TOKENS,
+    output=TEMP_DIR,
+    enable_mislabel_analysis=ENABLE_MISLABEL_ANALYSIS
 )
 
 # 开始分析
