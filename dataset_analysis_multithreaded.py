@@ -22,7 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class DatasetAnalyzer:
-    def __init__(self, api_key: str, max_workers: int = 5, max_retries: int = 5):
+    def __init__(self, api_key: str, max_workers: int = 5, max_retries: int = 5, temperature: float = 0.1, max_len: int = 10000, output: str = "temp_results", enable_mislabel_analysis: bool = True):
         """
         初始化数据集分析器
         
@@ -35,9 +35,12 @@ class DatasetAnalyzer:
         self.max_workers = max_workers
         self.max_retries = max_retries
         self.client = ZhipuAiClient(api_key=api_key)
+        self.temperature = temperature
+        self.max_len = max_len
+        self.enable_mislabel_analysis = enable_mislabel_analysis
         
         # 创建临时文件目录
-        self.temp_dir = "temp_results"
+        self.temp_dir = output
         os.makedirs(self.temp_dir, exist_ok=True)
         
         # 线程锁
@@ -52,7 +55,8 @@ class DatasetAnalyzer:
         """
         创建分析提示词
         """
-        prompt = f"""
+        if self.enable_mislabel_analysis:
+            prompt = f"""
 作为数据集分类专家，请分析以下数据集引用的分类原因。
 
 数据集信息：
@@ -63,7 +67,7 @@ class DatasetAnalyzer:
 聚合文本内容：
 {aggregated_text}
 
-分类标准：
+分类标准(粗略版)：
 A) Primary - 专门为本研究生成的数据
    - 作者为此研究创建的原始实验数据、测量或观察
    - 作者产生并存放的新数据集
@@ -83,7 +87,7 @@ C) None - 不是数据集引用或不相关
 请分析：
 1. 为什么这个数据集ID被归类为"{type_label}"类型？
 2. 在聚合文本中有哪些关键词或短语支持这个分类？
-3. 这个分类的上下文规律是什么？
+3. 从可复用且不局限某一个数据集ID的角度出发，这个分类的上下文规律是什么？
 4. 如果分类错误，正确的分类应该是什么，为什么？
 
 请以JSON格式返回分析结果：
@@ -93,10 +97,54 @@ C) None - 不是数据集引用或不相关
     "original_classification": "{type_label}",
     "analysis_reason": "详细分析分类原因",
     "supporting_keywords": ["关键词1", "关键词2", "..."],
-    "context_pattern": "归纳的上下文规律",
+    "context_pattern": "归纳的可复用的上下文规律，最好不针对具体某一个数据集",
     "is_correct_classification": true/false,
     "suggested_classification": "如果原分类错误，建议的正确分类",
     "confidence_score": 0.95
+}}
+"""
+        else:
+            prompt = f"""
+作为数据集分类专家，请分析以下数据集引用的分类原因。
+
+数据集信息：
+- 目标数据集ID: {target_dataset_id}
+- 文章ID: {article_id}
+- 分类类型: {type_label}
+
+聚合文本内容：
+{aggregated_text}
+
+分类标准(粗略版)：
+A) Primary - 专门为本研究生成的数据
+   - 作者为此研究创建的原始实验数据、测量或观察
+   - 作者产生并存放的新数据集
+   - 专门收集来回答本文研究问题的数据
+
+B) Secondary - 重用或源自现有来源的数据
+   - 之前发布的数据集被下载并重新分析
+   - 检索的公共数据库记录用于比较分析
+   - 现有数据被重新用于新的研究问题
+
+C) None - 不是数据集引用或不相关
+   - 对其他论文的引用（非数据集）
+   - 对方法、软件或工具的引用
+   - 在与数据使用无关的上下文中提及
+   - 提及的数据库标识符但没有实际数据使用
+
+请分析：
+1. 为什么这个数据集ID被归类为"{type_label}"类型？
+2. 在聚合文本中有哪些关键词或短语支持这个分类？
+3. 从可复用且不局限某一个数据集ID的角度出发，这个分类的上下文规律是什么？
+
+请以JSON格式返回分析结果：
+{{
+    "target_dataset_id": "{target_dataset_id}",
+    "article_id": "{article_id}",
+    "original_classification": "{type_label}",
+    "analysis_reason": "详细分析分类原因",
+    "supporting_keywords": ["关键词1", "关键词2", "..."],
+    "context_pattern": "归纳的可复用的上下文规律，最好不针对具体某一个数据集"
 }}
 """
         return prompt
@@ -116,8 +164,8 @@ C) None - 不是数据集引用或不相关
                         "type": "enabled",
                     },
                     stream=False,
-                    max_tokens=4096,
-                    temperature=0.3  # 降低温度以获得更一致的结果
+                    max_tokens=self.max_len,
+                    temperature=self.temperature  # 降低温度以获得更一致的结果
                 )
                 
                 content = response.choices[0].message.content
@@ -386,8 +434,10 @@ C) None - 不是数据集引用或不相关
             'classification_distribution': classification_dist,
             'top_keywords': dict(sorted(keyword_frequency.items(), 
                                       key=lambda x: x[1], reverse=True)[:20]),
-            'context_patterns_by_type': pattern_analysis,
-            'accuracy_analysis': {
+            'context_patterns_by_type': pattern_analysis
+        }
+        if self.enable_mislabel_analysis:
+            summary['accuracy_analysis'] = {
                 'total_analyzed': len([r for r in results if 'error' not in r]),
                 'correct_classifications': len([r for r in results 
                                               if 'error' not in r and 
@@ -396,7 +446,6 @@ C) None - 不是数据集引用或不相关
                                                 if 'error' not in r and 
                                                 not r.get('is_correct_classification', True)])
             }
-        }
         
         return summary
 

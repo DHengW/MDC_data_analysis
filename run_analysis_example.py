@@ -28,7 +28,7 @@ def main():
         return False
     
     print(f"📁 数据集文件: {PARQUET_FILE_PATH}")
-    print(f"🔧 配置: {MAX_WORKERS} 个并发线程, 批次大小 {BATCH_SIZE}")
+    print(f"🔧 配置: {MAX_WORKERS} 个并发线程, 批次大小 {BATCH_SIZE}, 推理温度 {TEMPERATURE}, 最大输出长度 {MAX_TOKENS}, 存储目录 {TEMP_DIR}")
     print(f"🔄 最大重试次数: {MAX_RETRIES}")
     
     # 询问是否继续
@@ -41,7 +41,11 @@ def main():
     analyzer = DatasetAnalyzer(
         api_key=API_KEY,
         max_workers=MAX_WORKERS,
-        max_retries=MAX_RETRIES
+        max_retries=MAX_RETRIES,
+        temperature=TEMPERATURE,
+        max_len=MAX_TOKENS,
+        output=TEMP_DIR,
+        enable_mislabel_analysis=ENABLE_MISLABEL_ANALYSIS
     )
     
     try:
@@ -76,11 +80,12 @@ def main():
                 percentage = (count / results['metadata']['total_processed']) * 100
                 print(f"  {class_type}: {count} ({percentage:.1f}%)")
             
-            # 显示准确性分析
-            accuracy = summary['accuracy_analysis']
-            if accuracy['total_analyzed'] > 0:
-                correct_rate = (accuracy['correct_classifications'] / accuracy['total_analyzed']) * 100
-                print(f"\n🎯 分类准确性: {correct_rate:.1f}% ({accuracy['correct_classifications']}/{accuracy['total_analyzed']})")
+            # 显示准确性分析（当启用误标注分析时）
+            if 'accuracy_analysis' in summary:
+                accuracy = summary['accuracy_analysis']
+                if accuracy['total_analyzed'] > 0:
+                    correct_rate = (accuracy['correct_classifications'] / accuracy['total_analyzed']) * 100
+                    print(f"\n🎯 分类准确性: {correct_rate:.1f}% ({accuracy['correct_classifications']}/{accuracy['total_analyzed']})")
             
             # 显示高频关键词
             print("\n🔍 高频关键词 (前10个):")
